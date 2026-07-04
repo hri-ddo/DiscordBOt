@@ -39,6 +39,9 @@ PRESETS = {
     "all_off",
 }
 
+FAN_WATTAGE = 60
+LIGHT_WATTAGE = 15
+
 AlertCallback = Callable[[dict[str, Any]], Awaitable[None]]
 
 
