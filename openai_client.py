@@ -15,6 +15,19 @@ from conversation import ConversationMessage, SYSTEM_PROMPT, normalize_message
 logger = logging.getLogger(__name__)
 
 
+STALE_CONTROL_LIMIT_PHRASES = (
+    "can't control",
+    "cannot control",
+    "can't directly control",
+    "can't control the lights yet",
+    "can't control it yet",
+    "hardware control is available",
+    "hardware control isn't available",
+    "hardware control is not available",
+    "when hardware control is available",
+)
+
+
 class OpenAIClient:
     def __init__(self, api_key: str, model: str) -> None:
         self._client = OpenAI(api_key=api_key)
@@ -65,6 +78,13 @@ class OpenAIClient:
         if not reply:
             logger.warning("OpenAI returned an empty response for user %s", user_id)
             return "I did not get a usable answer back. Could you try asking again?"
+
+        if contains_stale_control_limit(reply):
+            return (
+                "I can control connected office fans and lights through the "
+                "office WebSocket. Tell me the room, device type, number, and "
+                "whether you want it on or off."
+            )
 
         return reply
 
@@ -120,3 +140,8 @@ class OpenAIClient:
             return None
 
         return parsed if isinstance(parsed, dict) else None
+
+
+def contains_stale_control_limit(reply: str) -> bool:
+    normalized_reply = reply.lower()
+    return any(phrase in normalized_reply for phrase in STALE_CONTROL_LIMIT_PHRASES)

@@ -434,11 +434,13 @@ def create_bot() -> discord.Client:
             ai_client,
         )
         if ai_control_reply is not None:
+            conversations.reset(user_id)
             await send_chunks(message.channel, chunk_discord_message(ai_control_reply))
             return
 
         control_reply = await handle_natural_control_intent(user_message, office_client)
         if control_reply is not None:
+            conversations.reset(user_id)
             await send_chunks(message.channel, chunk_discord_message(control_reply))
             return
 
