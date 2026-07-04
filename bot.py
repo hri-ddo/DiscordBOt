@@ -155,6 +155,42 @@ async def handle_office_command(
     return None
 
 
+async def handle_natural_control_intent(
+    text: str,
+    office_client: OfficeWebSocketClient,
+) -> str | None:
+    normalized = normalize_message(text.lower())
+
+    wants_off = "off" in normalized and any(
+        phrase in normalized
+        for phrase in (
+            "turn off",
+            "turn all",
+            "switch off",
+            "shut off",
+            "make it off",
+            "make them off",
+            "all of them off",
+        )
+    )
+    mentions_lights = "light" in normalized or "all of them off" in normalized
+    if not wants_off or not mentions_lights:
+        return None
+
+    if not office_client.is_ready():
+        return "The office WebSocket is not connected, so I could not turn the lights off."
+
+    on_lights = office_client.on_device_ids("light")
+    if not on_lights:
+        return "All lights are already off."
+
+    toggled = await office_client.turn_off_on_devices("light")
+    if not toggled:
+        return "The office WebSocket is not connected, so I could not turn the lights off."
+
+    return "Turned off these lights: " + ", ".join(f"`{device_id}`" for device_id in toggled)
+
+
 def create_bot() -> discord.Client:
     settings = load_settings()
 
@@ -208,6 +244,11 @@ def create_bot() -> discord.Client:
         command_reply = await handle_office_command(user_message, office_client)
         if command_reply is not None:
             await send_chunks(message.channel, chunk_discord_message(command_reply))
+            return
+
+        control_reply = await handle_natural_control_intent(user_message, office_client)
+        if control_reply is not None:
+            await send_chunks(message.channel, chunk_discord_message(control_reply))
             return
 
         history = conversations.get_history(user_id)

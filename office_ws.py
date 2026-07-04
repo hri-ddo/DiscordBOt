@@ -78,11 +78,32 @@ class OfficeWebSocketClient:
     async def send_autosim(self, enabled: bool) -> bool:
         return await self._send({"type": "setAutoSim", "enabled": enabled})
 
+    async def turn_off_on_devices(self, device_type: str | None = None) -> list[str]:
+        """Toggle every currently-on matching device off using the WebSocket."""
+
+        targets = [
+            str(device["id"])
+            for device in self._devices()
+            if device.get("status") == "on"
+            and (device_type is None or device.get("type") == device_type)
+        ]
+        for device_id in targets:
+            await self.send_toggle(device_id)
+        return targets
+
     def is_ready(self) -> bool:
         return self.connected and self.latest_snapshot is not None
 
     def device_ids(self) -> list[str]:
         return [str(device["id"]) for device in self._devices()]
+
+    def on_device_ids(self, device_type: str | None = None) -> list[str]:
+        return [
+            str(device["id"])
+            for device in self._devices()
+            if device.get("status") == "on"
+            and (device_type is None or device.get("type") == device_type)
+        ]
 
     def format_status(self) -> str:
         if not self.latest_snapshot:
