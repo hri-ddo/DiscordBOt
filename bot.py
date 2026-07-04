@@ -161,29 +161,39 @@ async def handle_natural_control_intent(
 ) -> str | None:
     normalized = normalize_message(text.lower())
 
-    action_phrases = (
+    off_action_phrases = (
         "turn off",
-        "turn on",
-        "turn all",
+        "turn that off",
         "switch off",
-        "switch on",
         "shut off",
         "make it off",
-        "make it on",
         "make them off",
-        "make them on",
         "all of them off",
+    )
+    on_action_phrases = (
+        "turn on",
+        "turn that on",
+        "switch on",
+        "make it on",
+        "make them on",
         "all of them on",
     )
-    is_control_request = any(phrase in normalized for phrase in action_phrases)
-    wants_off = "off" in normalized and is_control_request
-    wants_on = "on" in normalized and is_control_request
-    mentions_lights = (
-        "light" in normalized
-        or "all of them off" in normalized
-        or "all of them on" in normalized
+    action_phrases = (
+        "turn all",
+        *off_action_phrases,
+        *on_action_phrases,
     )
-    if not mentions_lights or (wants_off == wants_on):
+    is_control_request = any(phrase in normalized for phrase in action_phrases) or (
+        "turn" in normalized and ("off" in normalized or "on" in normalized)
+    )
+    wants_off = any(phrase in normalized for phrase in off_action_phrases) or (
+        "turn" in normalized and "off" in normalized
+    )
+    wants_on = any(phrase in normalized for phrase in on_action_phrases) or (
+        "turn" in normalized and " on" in normalized and not wants_off
+    )
+    device_type = parse_device_type(normalized)
+    if device_type is None or (wants_off == wants_on):
         return None
 
     target_status = "off" if wants_off else "on"
@@ -192,50 +202,33 @@ async def handle_natural_control_intent(
     if not office_client.is_ready():
         return (
             "The office WebSocket is not connected, so I could not turn the "
-            f"lights {target_status}."
+            f"{device_type}s {target_status}."
         )
 
-    targets = office_client.device_ids_by_status(opposite_status, "light")
+    targets = office_client.device_ids_by_status(opposite_status, device_type)
     if not targets:
-        return f"All lights are already {target_status}."
+        return f"All {device_type}s are already {target_status}."
 
-    toggled = await office_client.set_devices_status(target_status, "light")
+    toggled = await office_client.set_devices_status(target_status, device_type)
     if not toggled:
         return (
             "The office WebSocket is not connected, so I could not turn the "
-            f"lights {target_status}."
+            f"{device_type}s {target_status}."
         )
 
     return (
-        f"Turned {target_status} these lights: "
+        f"Turned {target_status} these {device_type}s: "
         + ", ".join(f"`{device_id}`" for device_id in toggled)
     )
 
 
-async def handle_legacy_light_off_intent(
-    text: str,
-    office_client: OfficeWebSocketClient,
-) -> str | None:
-    """Compatibility wrapper for older tests/imports."""
-
-    normalized = normalize_message(text.lower())
-    wants_off = "off" in normalized and any(
-        phrase in normalized
-        for phrase in (
-            "turn off",
-            "turn all",
-            "switch off",
-            "shut off",
-            "make it off",
-            "make them off",
-            "all of them off",
-        )
-    )
-    mentions_lights = "light" in normalized or "all of them off" in normalized
-    if not wants_off or not mentions_lights:
+def parse_device_type(normalized_text: str) -> str | None:
+    has_light = "light" in normalized_text
+    has_fan = "fan" in normalized_text
+    if has_light == has_fan:
         return None
+    return "light" if has_light else "fan"
 
-    return await handle_natural_control_intent(text, office_client)
 
 
 def create_bot() -> discord.Client:
