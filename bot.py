@@ -219,10 +219,7 @@ async def handle_natural_control_intent(
             f"{device_type}s {target_status}."
         )
 
-    return (
-        f"Turned {target_status} these {device_type}s: "
-        + ", ".join(f"`{device_id}`" for device_id in toggled)
-    )
+    return f"Done. {office_client.format_room_summary()}"
 
 
 def parse_device_type(normalized_text: str) -> str | None:
@@ -272,7 +269,7 @@ async def handle_ai_control_intent(
         if not sent:
             return "The office WebSocket is not connected, so I could not control that device."
 
-        return f"Turned {status} {office_client.describe_device(device_id)}."
+        return f"Done. {office_client.format_room_summary(room)}"
 
     if action == "set_group":
         room_id = room if room in {"drawing", "workroom1", "workroom2"} else None
@@ -286,10 +283,7 @@ async def handle_ai_control_intent(
             return f"All {device_type}s{scope} are already {status}."
 
         toggled = await office_client.set_devices_status(status, device_type, room_id)
-        return (
-            f"Turned {status} these {device_type}s: "
-            + ", ".join(f"`{device_id}`" for device_id in toggled)
-        )
+        return f"Done. {office_client.format_room_summary(room_id)}"
 
     return None
 

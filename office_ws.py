@@ -160,13 +160,30 @@ class OfficeWebSocketClient:
         lines = []
         for room_id, room_label in ROOM_LABELS.items():
             devices = [device for device in self._devices() if device.get("room") == room_id]
-            on_count = sum(1 for device in devices if device.get("status") == "on")
-            wattage = sum(int(device.get("wattage", 0)) for device in devices)
-            lines.append(f"{room_label}: {on_count}/{len(devices)} on, {wattage}W")
+            lines.append(f"{room_label}: {summarize_room_devices(devices)}")
 
         alerts = self.latest_snapshot.get("alerts", [])
         alert_text = f"Active alerts: {len(alerts)}"
         return "\n".join([*lines, alert_text])
+
+    def format_room_summary(self, room_id: str | None = None) -> str:
+        if not self.latest_snapshot:
+            return "The office WebSocket is not connected yet."
+
+        room_ids = [room_id] if room_id else list(ROOM_LABELS)
+        lines = []
+        for current_room_id in room_ids:
+            if current_room_id not in ROOM_LABELS:
+                continue
+            devices = [
+                device
+                for device in self._devices()
+                if device.get("room") == current_room_id
+            ]
+            lines.append(
+                f"{ROOM_LABELS[current_room_id]}: {summarize_room_devices(devices)}"
+            )
+        return ". ".join(lines) + "."
 
     def format_usage(self) -> str:
         if not self.latest_snapshot:
@@ -320,6 +337,27 @@ def normalize_room(room_name: str) -> str | None:
     normalized = " ".join(room_name.lower().strip().split())
     compact = normalized.replace(" ", "")
     return ROOM_ALIASES.get(normalized) or ROOM_ALIASES.get(compact)
+
+
+def summarize_room_devices(devices: list[dict[str, Any]]) -> str:
+    on_fans = sum(
+        1
+        for device in devices
+        if device.get("type") == "fan" and device.get("status") == "on"
+    )
+    on_lights = sum(
+        1
+        for device in devices
+        if device.get("type") == "light" and device.get("status") == "on"
+    )
+
+    parts = []
+    if on_fans:
+        parts.append(f"{on_fans} fan{'s' if on_fans != 1 else ''} ON")
+    if on_lights:
+        parts.append(f"{on_lights} light{'s' if on_lights != 1 else ''} ON")
+
+    return ", ".join(parts) if parts else "all off"
 
 
 def normalize_preset(preset: str) -> str | None:
