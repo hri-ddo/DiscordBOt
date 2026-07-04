@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 
 DEFAULT_OPENAI_MODEL = "gpt-5.4-mini"
 DEFAULT_MAX_HISTORY_MESSAGES = 12
+DEFAULT_OFFICE_WS_URL = "ws://localhost:3001/ws"
 
 
 class ConfigError(RuntimeError):
@@ -22,6 +23,8 @@ class Settings:
     openai_api_key: str
     openai_model: str = DEFAULT_OPENAI_MODEL
     max_history_messages: int = DEFAULT_MAX_HISTORY_MESSAGES
+    office_ws_url: str = DEFAULT_OFFICE_WS_URL
+    office_alert_channel_id: int | None = None
 
 
 def _required_env(name: str) -> str:
@@ -47,6 +50,17 @@ def _int_env(name: str, default: int) -> int:
     return value
 
 
+def _optional_int_env(name: str) -> int | None:
+    raw_value = os.getenv(name, "").strip()
+    if not raw_value:
+        return None
+
+    try:
+        return int(raw_value)
+    except ValueError as exc:
+        raise ConfigError(f"{name} must be an integer.") from exc
+
+
 def load_settings() -> Settings:
     """Load and validate settings from .env and the process environment."""
 
@@ -60,4 +74,7 @@ def load_settings() -> Settings:
         max_history_messages=_int_env(
             "MAX_HISTORY_MESSAGES", DEFAULT_MAX_HISTORY_MESSAGES
         ),
+        office_ws_url=os.getenv("OFFICE_WS_URL", DEFAULT_OFFICE_WS_URL).strip()
+        or DEFAULT_OFFICE_WS_URL,
+        office_alert_channel_id=_optional_int_env("OFFICE_ALERT_CHANNEL_ID"),
     )

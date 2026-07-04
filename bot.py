@@ -10,6 +10,7 @@ import discord
 
 from config import ConfigError, load_settings
 from conversation import ConversationManager, normalize_message
+from office_ws import OfficeWebSocketClient, normalize_preset, parse_bool
 from openai_client import OpenAIClient
 
 
@@ -81,6 +82,79 @@ async def send_chunks(
         await destination.send(chunk)
 
 
+def build_help_text() -> str:
+    return "\n".join(
+        [
+            "Office commands:",
+            "`!status` - room summary from the live WebSocket snapshot",
+            "`!usage` - total and per-room wattage",
+            "`!room <drawing|workroom1|workroom2>` - device list for one room",
+            "`!toggle <deviceId>` - toggle a device, e.g. `drawing-fan-1`",
+            "`!preset <office_busy|after_hours|room_stuck|drawing_only|all_off>`",
+            "`!autosim <on|off>` - enable or disable simulation ticks",
+            "",
+            "You can also mention me or DM me with natural language questions.",
+        ]
+    )
+
+
+async def handle_office_command(
+    text: str,
+    office_client: OfficeWebSocketClient,
+) -> str | None:
+    if not text.startswith("!"):
+        return None
+
+    command, _, rest = text[1:].partition(" ")
+    command = command.lower().strip()
+    rest = rest.strip()
+
+    if command in {"help", "office"}:
+        return build_help_text()
+
+    if command == "status":
+        return office_client.format_status()
+
+    if command == "usage":
+        return office_client.format_usage()
+
+    if command == "room":
+        if not rest:
+            return 'Usage: `!room drawing` (also supports `workroom1` and `workroom2`).'
+        return office_client.format_room(rest)
+
+    if command == "toggle":
+        if not rest:
+            return "Usage: `!toggle drawing-fan-1`"
+        sent = await office_client.send_toggle(rest)
+        if not sent:
+            return "The office WebSocket is not connected, so I could not toggle that device."
+        return f"Sent toggle command for `{rest}` over WebSocket."
+
+    if command == "preset":
+        preset = normalize_preset(rest)
+        if not preset:
+            return (
+                "Usage: `!preset office_busy` "
+                "(office_busy, after_hours, room_stuck, drawing_only, all_off)."
+            )
+        sent = await office_client.send_preset(preset)
+        if not sent:
+            return "The office WebSocket is not connected, so I could not apply that preset."
+        return f"Sent preset command `{preset}` over WebSocket."
+
+    if command == "autosim":
+        enabled = parse_bool(rest)
+        if enabled is None:
+            return "Usage: `!autosim on` or `!autosim off`"
+        sent = await office_client.send_autosim(enabled)
+        if not sent:
+            return "The office WebSocket is not connected, so I could not update auto simulation."
+        return f"Sent auto simulation command: `{enabled}`."
+
+    return None
+
+
 def create_bot() -> discord.Client:
     settings = load_settings()
 
@@ -90,14 +164,34 @@ def create_bot() -> discord.Client:
 
     bot = discord.Client(intents=intents)
     conversations = ConversationManager(settings.max_history_messages)
+    office_client = OfficeWebSocketClient(settings.office_ws_url)
     ai_client = OpenAIClient(
         api_key=settings.openai_api_key,
         model=settings.openai_model,
     )
 
+    async def post_alert(alert: dict[str, object]) -> None:
+        if not settings.office_alert_channel_id:
+            return
+
+        channel = bot.get_channel(settings.office_alert_channel_id)
+        if channel is None:
+            try:
+                channel = await bot.fetch_channel(settings.office_alert_channel_id)
+            except discord.DiscordException:
+                logger.exception(
+                    "Could not fetch alert channel %s",
+                    settings.office_alert_channel_id,
+                )
+                return
+
+        if isinstance(channel, discord.abc.Messageable):
+            await channel.send(f"Office alert: {office_client.format_alert(alert)}")
+
     @bot.event
     async def on_ready() -> None:
         logger.info("Logged in as %s (%s)", bot.user, bot.user.id if bot.user else "?")
+        office_client.start(post_alert)
 
     @bot.event
     async def on_message(message: discord.Message) -> None:
@@ -111,10 +205,20 @@ def create_bot() -> discord.Client:
         else:
             user_message = normalize_message(user_message)
 
+        command_reply = await handle_office_command(user_message, office_client)
+        if command_reply is not None:
+            await send_chunks(message.channel, chunk_discord_message(command_reply))
+            return
+
         history = conversations.get_history(user_id)
 
         async with message.channel.typing():
-            reply = await ai_client.generate_reply(user_id, user_message, history)
+            reply = await ai_client.generate_reply(
+                user_id,
+                user_message,
+                history,
+                office_client.context_for_ai(),
+            )
 
         if user_message:
             conversations.append_user_message(user_id, user_message)
@@ -133,6 +237,8 @@ def create_bot() -> discord.Client:
 if __name__ == "__main__":
     try:
         create_bot()
+    except KeyboardInterrupt:
+        raise SystemExit(0)
     except ConfigError as exc:
         logger.error("%s", exc)
         raise SystemExit(1) from exc

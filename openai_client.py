@@ -24,6 +24,7 @@ class OpenAIClient:
         user_id: int,
         user_message: str,
         history: Sequence[ConversationMessage],
+        office_context: str | None = None,
     ) -> str:
         """Generate a Discord-ready assistant response."""
 
@@ -40,13 +41,16 @@ class OpenAIClient:
             if normalize_message(message.content)
         ]
         input_messages.append({"role": "user", "content": normalized_message})
+        instructions = SYSTEM_PROMPT
+        if office_context:
+            instructions = f"{SYSTEM_PROMPT}\n\nCurrent office context:\n{office_context}"
 
         try:
             # The OpenAI SDK call is synchronous, so run it off the event loop.
             response = await asyncio.to_thread(
                 self._client.responses.create,
                 model=self._model,
-                instructions=SYSTEM_PROMPT,
+                instructions=instructions,
                 input=input_messages,
             )
         except OpenAIError:

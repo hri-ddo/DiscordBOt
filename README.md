@@ -1,17 +1,19 @@
 # AI Office Assistant Discord Bot
 
-A hackathon-ready Discord bot that gives an office monitoring system a friendly conversational interface. The bot uses OpenAI for natural language replies, remembers short per-user context, and avoids robotic data dumps while the hardware-control layer is still being built.
+A hackathon-ready Discord bot that gives the IUT office monitoring system a friendly conversational interface. The bot uses OpenAI for natural language replies, remembers short per-user context, and connects to the office dashboard backend over WebSocket for live device status and control.
 
-This repository contains Phase 1: the Discord and AI foundation. Live sensor readings, device control, proactive alerts, and backend hardware integration are planned for later phases.
+This repository contains the Python Discord bot component. The dashboard and office simulation server live in the IUT Hackathon project and expose `ws://localhost:3001/ws`.
 
 ## What It Does
 
 - Answers in Discord DMs or when mentioned in a server channel.
 - Ignores unrelated server messages to reduce noise and API usage.
 - Uses OpenAI's Responses API for natural language generation.
+- Connects to the IUT Hackathon office server over WebSocket.
 - Keeps short in-memory conversation history per Discord user.
+- Supports live office commands: status, usage, room view, toggle, presets, and auto simulation.
+- Can post live office alerts to a configured Discord channel.
 - Responds in a warm office-assistant tone.
-- Clearly says when hardware status or control is not available yet.
 - Loads secrets from a local `.env` file that is not committed.
 
 ## Demo Flow
@@ -19,14 +21,16 @@ This repository contains Phase 1: the Discord and AI foundation. Live sensor rea
 1. DM the bot: `Can you help me summarize office status updates?`
 2. Ask a follow-up: `Make that shorter for the team channel.`
 3. Mention the bot in a server: `@OfficeBot what can you do right now?`
-4. Ask for hardware control: `Turn off the drawing room lights.`
-5. The bot should explain that hardware integration is not connected yet instead of pretending the action succeeded.
+4. Ask for live state: `@OfficeBot what is the office status?`
+5. Run `!toggle drawing-fan-1` and watch the dashboard update through WebSocket.
+6. Run `!preset room_stuck` to trigger a hackathon-friendly alert scenario.
 
 ## Architecture
 
 ```text
 Discord message
     -> bot.py routing and mention/DM filtering
+    -> office_ws.py live WebSocket snapshot and commands
     -> ConversationManager rolling user history
     -> OpenAI Responses API
     -> chunked Discord reply
@@ -38,6 +42,7 @@ The code is intentionally small for hackathon review. Each module has one clear 
 bot.py             Discord client, message routing, typing indicator, reply chunking
 config.py          .env loading, required secret validation, typed settings
 conversation.py    System prompt and per-user in-memory conversation history
+office_ws.py       IUT Hackathon WebSocket client, snapshot formatting, commands
 openai_client.py   OpenAI Responses API wrapper and graceful API error fallback
 requirements.txt   Python dependencies
 .env.example       Safe environment variable template
@@ -78,7 +83,27 @@ DISCORD_TOKEN=your-discord-bot-token
 OPENAI_API_KEY=your-openai-api-key
 OPENAI_MODEL=gpt-5.4-mini
 MAX_HISTORY_MESSAGES=12
+OFFICE_WS_URL=ws://localhost:3001/ws
+OFFICE_ALERT_CHANNEL_ID=
 ```
+
+## Run the Office Server
+
+The bot expects the IUT Hackathon office server to be running separately:
+
+```bash
+git clone https://github.com/itzMRZ/IUT_Hackathon.git
+cd IUT_Hackathon
+npm install
+npm run server
+```
+
+That starts:
+
+- REST API: `http://localhost:3001`
+- WebSocket: `ws://localhost:3001/ws`
+
+The dashboard can also be started with `npm run dev`, but the bot only needs the WebSocket server.
 
 ## Discord Bot Setup
 
@@ -98,12 +123,30 @@ python bot.py
 
 When the bot connects, the terminal logs the Discord account name and ID.
 
+## Discord Commands
+
+Commands work in DMs or when the bot is mentioned in a server channel:
+
+| Command | Description |
+| --- | --- |
+| `!help` | Show command list. |
+| `!status` | Summarize all rooms from the latest WebSocket snapshot. |
+| `!usage` | Show total and per-room wattage. |
+| `!room drawing` | Show each device in one room. |
+| `!toggle drawing-fan-1` | Send a WebSocket toggle command for a device. |
+| `!preset room_stuck` | Apply a backend demo preset. |
+| `!autosim off` | Enable or disable backend simulation ticks. |
+
+Supported rooms: `drawing`, `workroom1`, `workroom2`.
+
+Supported presets: `office_busy`, `after_hours`, `room_stuck`, `drawing_only`, `all_off`.
+
 ## Verification
 
 Compile the source files:
 
 ```bash
-python -m py_compile bot.py config.py conversation.py openai_client.py
+python -m py_compile bot.py config.py conversation.py openai_client.py office_ws.py
 ```
 
 Manual smoke test:
@@ -111,7 +154,9 @@ Manual smoke test:
 1. DM the bot and confirm it replies.
 2. Ask a follow-up question and confirm it remembers the previous turn.
 3. Mention the bot in a server channel and confirm it replies.
-4. Send an unmentioned message in a server channel and confirm it stays quiet.
+4. Start the IUT office server and run `!status`.
+5. Run `!toggle drawing-fan-1` and confirm the dashboard updates.
+6. Send an unmentioned message in a server channel and confirm it stays quiet.
 
 ## Configuration
 
@@ -121,6 +166,8 @@ Manual smoke test:
 | `OPENAI_API_KEY` | Yes | None | OpenAI API key used by the Responses API client. |
 | `OPENAI_MODEL` | No | `gpt-5.4-mini` | Model used for replies. |
 | `MAX_HISTORY_MESSAGES` | No | `12` | Number of recent user/assistant messages kept per user. |
+| `OFFICE_WS_URL` | No | `ws://localhost:3001/ws` | IUT Hackathon office server WebSocket URL. |
+| `OFFICE_ALERT_CHANNEL_ID` | No | None | Discord channel ID for live alert posts. |
 
 ## Troubleshooting
 
@@ -129,6 +176,8 @@ Manual smoke test:
 - Bot still does not respond: confirm Message Content Intent is enabled in the Discord Developer Portal.
 - Discord login fails: verify the bot token and invite permissions.
 - OpenAI replies fail: verify `OPENAI_API_KEY`, billing/access, and the configured model.
+- `!status` says WebSocket is not connected: start the IUT server with `npm run server` and verify `OFFICE_WS_URL`.
+- Toggle commands do nothing: confirm the backend terminal says `WebSocket: ws://localhost:3001/ws`.
 - Certificate errors on macOS: activate the virtual environment and ensure dependencies are installed; `certifi` is installed through the OpenAI dependency chain.
 
 ## Security Notes
@@ -140,8 +189,7 @@ Manual smoke test:
 
 ## Roadmap
 
-- Phase 2: connect to a backend service for simulated office hardware status.
-- Phase 2: add tool/function calling so natural language requests can map to safe hardware actions.
-- Phase 2: add slash or prefix commands as deterministic fallbacks.
+- Add OpenAI tool/function calling so natural language requests can safely trigger WebSocket actions.
+- Add slash commands as deterministic fallbacks.
 - Phase 3: add proactive alerts for office anomalies.
 - Phase 3: add scheduled polling with `discord.ext.tasks`.
