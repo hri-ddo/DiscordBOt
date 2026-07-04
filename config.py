@@ -11,6 +11,8 @@ from dotenv import load_dotenv
 DEFAULT_OPENAI_MODEL = "gpt-5.4-mini"
 DEFAULT_MAX_HISTORY_MESSAGES = 12
 DEFAULT_OFFICE_WS_URL = "ws://localhost:3001/ws"
+DEFAULT_OFFICE_ALERT_HOUR = 21
+DEFAULT_OFFICE_ALERT_REPEAT_MINUTES = 30
 
 
 class ConfigError(RuntimeError):
@@ -25,6 +27,9 @@ class Settings:
     max_history_messages: int = DEFAULT_MAX_HISTORY_MESSAGES
     office_ws_url: str = DEFAULT_OFFICE_WS_URL
     office_alert_channel_id: int | None = None
+    office_after_hours_alerts: bool = True
+    office_alert_hour: int = DEFAULT_OFFICE_ALERT_HOUR
+    office_alert_repeat_minutes: int = DEFAULT_OFFICE_ALERT_REPEAT_MINUTES
 
 
 def _required_env(name: str) -> str:
@@ -61,6 +66,32 @@ def _optional_int_env(name: str) -> int | None:
         raise ConfigError(f"{name} must be an integer.") from exc
 
 
+def _bool_env(name: str, default: bool) -> bool:
+    raw_value = os.getenv(name, "").strip().lower()
+    if not raw_value:
+        return default
+    if raw_value in {"1", "true", "yes", "on", "enabled"}:
+        return True
+    if raw_value in {"0", "false", "no", "off", "disabled"}:
+        return False
+    raise ConfigError(f"{name} must be true or false.")
+
+
+def _ranged_int_env(name: str, default: int, minimum: int, maximum: int) -> int:
+    raw_value = os.getenv(name, "").strip()
+    if not raw_value:
+        value = default
+    else:
+        try:
+            value = int(raw_value)
+        except ValueError as exc:
+            raise ConfigError(f"{name} must be an integer.") from exc
+
+    if not minimum <= value <= maximum:
+        raise ConfigError(f"{name} must be between {minimum} and {maximum}.")
+    return value
+
+
 def load_settings() -> Settings:
     """Load and validate settings from .env and the process environment."""
 
@@ -77,4 +108,17 @@ def load_settings() -> Settings:
         office_ws_url=os.getenv("OFFICE_WS_URL", DEFAULT_OFFICE_WS_URL).strip()
         or DEFAULT_OFFICE_WS_URL,
         office_alert_channel_id=_optional_int_env("OFFICE_ALERT_CHANNEL_ID"),
+        office_after_hours_alerts=_bool_env("OFFICE_AFTER_HOURS_ALERTS", True),
+        office_alert_hour=_ranged_int_env(
+            "OFFICE_ALERT_HOUR",
+            DEFAULT_OFFICE_ALERT_HOUR,
+            0,
+            23,
+        ),
+        office_alert_repeat_minutes=_ranged_int_env(
+            "OFFICE_ALERT_REPEAT_MINUTES",
+            DEFAULT_OFFICE_ALERT_REPEAT_MINUTES,
+            1,
+            1440,
+        ),
     )

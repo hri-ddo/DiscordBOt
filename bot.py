@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from collections.abc import Iterable
+from datetime import datetime, timedelta
+from typing import Any
 
 import discord
 
@@ -230,6 +233,89 @@ def parse_device_type(normalized_text: str) -> str | None:
     return "light" if has_light else "fan"
 
 
+async def handle_ai_control_intent(
+    text: str,
+    office_client: OfficeWebSocketClient,
+    ai_client: OpenAIClient,
+) -> str | None:
+    if not office_client.is_ready():
+        return None
+
+    intent = await ai_client.parse_control_intent(text, office_client.device_ids())
+    if not intent or intent.get("action") == "none":
+        return None
+
+    action = intent.get("action")
+    room = intent.get("room")
+    device_type = intent.get("device_type")
+    status = intent.get("status")
+
+    if device_type not in {"fan", "light"} or status not in {"on", "off"}:
+        return None
+
+    if action == "set_device":
+        device_number = intent.get("device_number")
+        if room not in {"drawing", "workroom1", "workroom2"}:
+            return None
+        if not isinstance(device_number, int):
+            return None
+
+        device_id = office_client.resolve_device_id(room, device_type, device_number)
+        if not device_id:
+            return "I could not find that exact office device."
+
+        device = office_client.device_by_id(device_id)
+        if device and device.get("status") == status:
+            return f"{office_client.describe_device(device_id)} is already {status}."
+
+        sent = await office_client.set_device_status(device_id, status)
+        if not sent:
+            return "The office WebSocket is not connected, so I could not control that device."
+
+        return f"Turned {status} {office_client.describe_device(device_id)}."
+
+    if action == "set_group":
+        room_id = room if room in {"drawing", "workroom1", "workroom2"} else None
+        targets = office_client.device_ids_by_status(
+            "off" if status == "on" else "on",
+            device_type,
+            room_id,
+        )
+        if not targets:
+            scope = f" in {room_id}" if room_id else ""
+            return f"All {device_type}s{scope} are already {status}."
+
+        toggled = await office_client.set_devices_status(status, device_type, room_id)
+        return (
+            f"Turned {status} these {device_type}s: "
+            + ", ".join(f"`{device_id}`" for device_id in toggled)
+        )
+
+    return None
+
+
+def format_after_hours_message(on_devices: list[dict[str, Any]], alert_hour: int) -> str:
+    room_labels = {
+        "drawing": "Drawing Room",
+        "workroom1": "Work Room 1",
+        "workroom2": "Work Room 2",
+    }
+    device_lines = []
+    for device in on_devices:
+        room = str(device.get("room"))
+        room_label = room_labels.get(room, room)
+        device_lines.append(
+            f"- {room_label} {device.get('label')} (`{device.get('id')}`)"
+        )
+
+    return "\n".join(
+        [
+            f"After-hours reminder: these devices are still ON after {alert_hour}:00.",
+            *device_lines,
+        ]
+    )
+
+
 
 def create_bot() -> discord.Client:
     settings = load_settings()
@@ -241,36 +327,90 @@ def create_bot() -> discord.Client:
     bot = discord.Client(intents=intents)
     conversations = ConversationManager(settings.max_history_messages)
     office_client = OfficeWebSocketClient(settings.office_ws_url)
+    last_notice_channel_id: int | None = settings.office_alert_channel_id
+    last_after_hours_signature: tuple[str, ...] = ()
+    last_after_hours_sent_at: datetime | None = None
+    after_hours_task: asyncio.Task[None] | None = None
     ai_client = OpenAIClient(
         api_key=settings.openai_api_key,
         model=settings.openai_model,
     )
 
-    async def post_alert(alert: dict[str, object]) -> None:
-        if not settings.office_alert_channel_id:
-            return
+    async def get_notice_channel() -> discord.abc.Messageable | None:
+        channel_id = settings.office_alert_channel_id or last_notice_channel_id
+        if not channel_id:
+            return None
 
-        channel = bot.get_channel(settings.office_alert_channel_id)
+        channel = bot.get_channel(channel_id)
         if channel is None:
             try:
-                channel = await bot.fetch_channel(settings.office_alert_channel_id)
+                channel = await bot.fetch_channel(channel_id)
             except discord.DiscordException:
-                logger.exception(
-                    "Could not fetch alert channel %s",
-                    settings.office_alert_channel_id,
-                )
-                return
+                logger.exception("Could not fetch notice channel %s", channel_id)
+                return None
 
-        if isinstance(channel, discord.abc.Messageable):
+        return channel if isinstance(channel, discord.abc.Messageable) else None
+
+    async def post_alert(alert: dict[str, object]) -> None:
+        channel = await get_notice_channel()
+        if channel:
             await channel.send(f"Office alert: {office_client.format_alert(alert)}")
+
+    async def after_hours_monitor() -> None:
+        nonlocal last_after_hours_signature, last_after_hours_sent_at
+
+        await bot.wait_until_ready()
+        while not bot.is_closed():
+            await asyncio.sleep(60)
+            if not settings.office_after_hours_alerts or not office_client.is_ready():
+                continue
+
+            now = datetime.now()
+            if now.hour < settings.office_alert_hour:
+                last_after_hours_signature = ()
+                last_after_hours_sent_at = None
+                continue
+
+            on_devices = office_client.on_devices()
+            if not on_devices:
+                last_after_hours_signature = ()
+                last_after_hours_sent_at = None
+                continue
+
+            signature = tuple(sorted(str(device.get("id")) for device in on_devices))
+            repeat_after = timedelta(minutes=settings.office_alert_repeat_minutes)
+            should_send = signature != last_after_hours_signature or (
+                last_after_hours_sent_at is not None
+                and now - last_after_hours_sent_at >= repeat_after
+            )
+            if not should_send:
+                continue
+
+            channel = await get_notice_channel()
+            if not channel:
+                continue
+
+            await channel.send(
+                format_after_hours_message(on_devices, settings.office_alert_hour)
+            )
+            last_after_hours_signature = signature
+            last_after_hours_sent_at = now
 
     @bot.event
     async def on_ready() -> None:
+        nonlocal after_hours_task
+
         logger.info("Logged in as %s (%s)", bot.user, bot.user.id if bot.user else "?")
         office_client.start(post_alert)
+        if settings.office_after_hours_alerts and (
+            after_hours_task is None or after_hours_task.done()
+        ):
+            after_hours_task = bot.loop.create_task(after_hours_monitor())
 
     @bot.event
     async def on_message(message: discord.Message) -> None:
+        nonlocal last_notice_channel_id
+
         if bot.user is None or not should_respond(message, bot.user):
             return
 
@@ -281,9 +421,20 @@ def create_bot() -> discord.Client:
         else:
             user_message = normalize_message(user_message)
 
+        last_notice_channel_id = message.channel.id
+
         command_reply = await handle_office_command(user_message, office_client)
         if command_reply is not None:
             await send_chunks(message.channel, chunk_discord_message(command_reply))
+            return
+
+        ai_control_reply = await handle_ai_control_intent(
+            user_message,
+            office_client,
+            ai_client,
+        )
+        if ai_control_reply is not None:
+            await send_chunks(message.channel, chunk_discord_message(ai_control_reply))
             return
 
         control_reply = await handle_natural_control_intent(user_message, office_client)

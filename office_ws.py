@@ -82,6 +82,7 @@ class OfficeWebSocketClient:
         self,
         target_status: str,
         device_type: str | None = None,
+        room_id: str | None = None,
     ) -> list[str]:
         """Toggle matching devices that are not already at the target status."""
 
@@ -90,16 +91,40 @@ class OfficeWebSocketClient:
             for device in self._devices()
             if device.get("status") != target_status
             and (device_type is None or device.get("type") == device_type)
+            and (room_id is None or device.get("room") == room_id)
         ]
         for device_id in targets:
             await self.send_toggle(device_id)
         return targets
+
+    async def set_device_status(self, device_id: str, target_status: str) -> bool:
+        device = self.device_by_id(device_id)
+        if not device:
+            return False
+        if device.get("status") == target_status:
+            return True
+        return await self.send_toggle(device_id)
 
     def is_ready(self) -> bool:
         return self.connected and self.latest_snapshot is not None
 
     def device_ids(self) -> list[str]:
         return [str(device["id"]) for device in self._devices()]
+
+    def device_by_id(self, device_id: str) -> dict[str, Any] | None:
+        for device in self._devices():
+            if device.get("id") == device_id:
+                return device
+        return None
+
+    def resolve_device_id(
+        self,
+        room_id: str,
+        device_type: str,
+        device_number: int,
+    ) -> str | None:
+        device_id = f"{room_id}-{device_type}-{device_number}"
+        return device_id if self.device_by_id(device_id) else None
 
     def on_device_ids(self, device_type: str | None = None) -> list[str]:
         return self.device_ids_by_status("on", device_type)
@@ -108,13 +133,25 @@ class OfficeWebSocketClient:
         self,
         status: str,
         device_type: str | None = None,
+        room_id: str | None = None,
     ) -> list[str]:
         return [
             str(device["id"])
             for device in self._devices()
             if device.get("status") == status
             and (device_type is None or device.get("type") == device_type)
+            and (room_id is None or device.get("room") == room_id)
         ]
+
+    def on_devices(self) -> list[dict[str, Any]]:
+        return [device for device in self._devices() if device.get("status") == "on"]
+
+    def describe_device(self, device_id: str) -> str:
+        device = self.device_by_id(device_id)
+        if not device:
+            return device_id
+        room = ROOM_LABELS.get(str(device.get("room")), str(device.get("room")))
+        return f"{room} {device.get('label')} (`{device_id}`)"
 
     def format_status(self) -> str:
         if not self.latest_snapshot:

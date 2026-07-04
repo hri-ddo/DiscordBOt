@@ -85,6 +85,9 @@ OPENAI_MODEL=gpt-5.4-mini
 MAX_HISTORY_MESSAGES=12
 OFFICE_WS_URL=ws://localhost:3001/ws
 OFFICE_ALERT_CHANNEL_ID=
+OFFICE_AFTER_HOURS_ALERTS=true
+OFFICE_ALERT_HOUR=21
+OFFICE_ALERT_REPEAT_MINUTES=30
 ```
 
 ## Run the Office Server
@@ -141,6 +144,20 @@ Supported rooms: `drawing`, `workroom1`, `workroom2`.
 
 Supported presets: `office_busy`, `after_hours`, `room_stuck`, `drawing_only`, `all_off`.
 
+Natural-language controls also work when the user mentions a specific room,
+device type, device number, and state. The bot uses OpenAI to parse these
+requests, so equivalent phrasing in other languages can map to the same safe
+WebSocket command:
+
+```text
+@Abbas turn Drawing Room fan 1 on
+@Abbas drawing room light 2 off
+@Abbas work room 2 fan 2 bondho kore dao
+```
+
+For safety, ambiguous requests fall back to a normal assistant reply instead
+of guessing the device.
+
 ## Verification
 
 Compile the source files:
@@ -168,6 +185,9 @@ Manual smoke test:
 | `MAX_HISTORY_MESSAGES` | No | `12` | Number of recent user/assistant messages kept per user. |
 | `OFFICE_WS_URL` | No | `ws://localhost:3001/ws` | IUT Hackathon office server WebSocket URL. |
 | `OFFICE_ALERT_CHANNEL_ID` | No | None | Discord channel ID for live alert posts. |
+| `OFFICE_AFTER_HOURS_ALERTS` | No | `true` | Enables reminders for devices still on after the configured hour. |
+| `OFFICE_ALERT_HOUR` | No | `21` | Local-hour threshold for after-hours reminders. |
+| `OFFICE_ALERT_REPEAT_MINUTES` | No | `30` | Reminder repeat interval when the same devices remain on. |
 
 ## Troubleshooting
 
@@ -178,6 +198,7 @@ Manual smoke test:
 - OpenAI replies fail: verify `OPENAI_API_KEY`, billing/access, and the configured model.
 - `!status` says WebSocket is not connected: start the IUT server with `npm run server` and verify `OFFICE_WS_URL`.
 - Toggle commands do nothing: confirm the backend terminal says `WebSocket: ws://localhost:3001/ws`.
+- After-hours reminders do not appear: set `OFFICE_ALERT_CHANNEL_ID`, or interact with the bot once in the channel you want it to use.
 - Certificate errors on macOS: activate the virtual environment and ensure dependencies are installed; `certifi` is installed through the OpenAI dependency chain.
 
 ## Security Notes
