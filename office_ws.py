@@ -78,13 +78,17 @@ class OfficeWebSocketClient:
     async def send_autosim(self, enabled: bool) -> bool:
         return await self._send({"type": "setAutoSim", "enabled": enabled})
 
-    async def turn_off_on_devices(self, device_type: str | None = None) -> list[str]:
-        """Toggle every currently-on matching device off using the WebSocket."""
+    async def set_devices_status(
+        self,
+        target_status: str,
+        device_type: str | None = None,
+    ) -> list[str]:
+        """Toggle matching devices that are not already at the target status."""
 
         targets = [
             str(device["id"])
             for device in self._devices()
-            if device.get("status") == "on"
+            if device.get("status") != target_status
             and (device_type is None or device.get("type") == device_type)
         ]
         for device_id in targets:
@@ -98,10 +102,17 @@ class OfficeWebSocketClient:
         return [str(device["id"]) for device in self._devices()]
 
     def on_device_ids(self, device_type: str | None = None) -> list[str]:
+        return self.device_ids_by_status("on", device_type)
+
+    def device_ids_by_status(
+        self,
+        status: str,
+        device_type: str | None = None,
+    ) -> list[str]:
         return [
             str(device["id"])
             for device in self._devices()
-            if device.get("status") == "on"
+            if device.get("status") == status
             and (device_type is None or device.get("type") == device_type)
         ]
 

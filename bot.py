@@ -161,6 +161,64 @@ async def handle_natural_control_intent(
 ) -> str | None:
     normalized = normalize_message(text.lower())
 
+    action_phrases = (
+        "turn off",
+        "turn on",
+        "turn all",
+        "switch off",
+        "switch on",
+        "shut off",
+        "make it off",
+        "make it on",
+        "make them off",
+        "make them on",
+        "all of them off",
+        "all of them on",
+    )
+    is_control_request = any(phrase in normalized for phrase in action_phrases)
+    wants_off = "off" in normalized and is_control_request
+    wants_on = "on" in normalized and is_control_request
+    mentions_lights = (
+        "light" in normalized
+        or "all of them off" in normalized
+        or "all of them on" in normalized
+    )
+    if not mentions_lights or (wants_off == wants_on):
+        return None
+
+    target_status = "off" if wants_off else "on"
+    opposite_status = "on" if target_status == "off" else "off"
+
+    if not office_client.is_ready():
+        return (
+            "The office WebSocket is not connected, so I could not turn the "
+            f"lights {target_status}."
+        )
+
+    targets = office_client.device_ids_by_status(opposite_status, "light")
+    if not targets:
+        return f"All lights are already {target_status}."
+
+    toggled = await office_client.set_devices_status(target_status, "light")
+    if not toggled:
+        return (
+            "The office WebSocket is not connected, so I could not turn the "
+            f"lights {target_status}."
+        )
+
+    return (
+        f"Turned {target_status} these lights: "
+        + ", ".join(f"`{device_id}`" for device_id in toggled)
+    )
+
+
+async def handle_legacy_light_off_intent(
+    text: str,
+    office_client: OfficeWebSocketClient,
+) -> str | None:
+    """Compatibility wrapper for older tests/imports."""
+
+    normalized = normalize_message(text.lower())
     wants_off = "off" in normalized and any(
         phrase in normalized
         for phrase in (
@@ -177,18 +235,7 @@ async def handle_natural_control_intent(
     if not wants_off or not mentions_lights:
         return None
 
-    if not office_client.is_ready():
-        return "The office WebSocket is not connected, so I could not turn the lights off."
-
-    on_lights = office_client.on_device_ids("light")
-    if not on_lights:
-        return "All lights are already off."
-
-    toggled = await office_client.turn_off_on_devices("light")
-    if not toggled:
-        return "The office WebSocket is not connected, so I could not turn the lights off."
-
-    return "Turned off these lights: " + ", ".join(f"`{device_id}`" for device_id in toggled)
+    return await handle_natural_control_intent(text, office_client)
 
 
 def create_bot() -> discord.Client:
