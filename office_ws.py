@@ -95,6 +95,7 @@ class OfficeWebSocketClient:
         ]
         for device_id in targets:
             await self.send_toggle(device_id)
+        self._patch_device_statuses(targets, target_status)
         return targets
 
     async def set_device_status(self, device_id: str, target_status: str) -> bool:
@@ -103,7 +104,10 @@ class OfficeWebSocketClient:
             return False
         if device.get("status") == target_status:
             return True
-        return await self.send_toggle(device_id)
+        sent = await self.send_toggle(device_id)
+        if sent:
+            self._patch_device_statuses([device_id], target_status)
+        return sent
 
     def is_ready(self) -> bool:
         return self.connected and self.latest_snapshot is not None
@@ -331,6 +335,24 @@ class OfficeWebSocketClient:
             return []
         devices = self.latest_snapshot.get("devices", [])
         return devices if isinstance(devices, list) else []
+
+    def _patch_device_statuses(self, device_ids: list[str], target_status: str) -> None:
+        if not self.latest_snapshot:
+            return
+
+        device_id_set = set(device_ids)
+        for device in self._devices():
+            if device.get("id") not in device_id_set:
+                continue
+
+            device["status"] = target_status
+            if target_status == "off":
+                device["wattage"] = 0
+                device["on_since"] = None
+            else:
+                device["wattage"] = FAN_WATTAGE if device.get("type") == "fan" else LIGHT_WATTAGE
+                device["on_since"] = datetime.now().isoformat()
+            device["last_changed"] = datetime.now().isoformat()
 
 
 def normalize_room(room_name: str) -> str | None:
